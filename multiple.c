@@ -685,11 +685,82 @@ int solovayPrime(int a, bignum* n) {
 	bignum_deinit(modpow);
 	return result;
 }
+/**
+ * Miller-Rabin Primality Test.
+ * Returns 1 if n is probably prime, 0 if composite.
+ * k is the number of rounds (accuracy).
+ */
+int rabinMillerPrime(bignum* n, int k) {
+    if (bignum_equal(n, &NUMS[2])) return 1;
+    if (n->data[0] % 2 == 0 || bignum_equal(n, &NUMS[1])) return 0;
 
+    bignum *n_minus1 = bignum_init();
+    bignum *d = bignum_init();
+    bignum *a = bignum_init();
+    bignum *x = bignum_init();
+    bignum *temp = bignum_init();
+    int r = 0, i, j, is_composite;
+
+    // n_minus1 = n - 1
+    bignum_copy(n, n_minus1);
+    bignum_isubtract(n_minus1, &NUMS[1]);
+
+    // d = n - 1, r = 0
+    bignum_copy(n_minus1, d);
+    while (d->data[0] % 2 == 0) {
+        bignum_idivide(d, &NUMS[2]);
+        r++;
+    }
+
+    for (i = 0; i < k; i++) {
+        // a = random in [2, n-2]
+        if (n->length == 1) {
+            int rand_a = rand() % (n->data[0] - 3) + 2;
+            bignum_fromint(a, rand_a);
+        } else {
+            // For multi-limb n, just use a random number < n-2
+            bignum_fromint(a, rand() % (RAND_MAX - 2) + 2);
+        }
+
+        // x = a^d mod n
+        bignum_modpow(a, d, n, x);
+
+        // if x == 1 or x == n-1, continue to next round
+        if (bignum_equal(x, &NUMS[1]) || bignum_equal(x, n_minus1))
+            continue;
+
+        is_composite = 1;
+        for (j = 0; j < r - 1; j++) {
+            bignum_modpow(x, &NUMS[2], n, x);
+            if (bignum_equal(x, n_minus1)) {
+                is_composite = 0;
+                break;
+            }
+        }
+        if (is_composite) {
+            // Clean up
+            bignum_deinit(n_minus1);
+            bignum_deinit(d);
+            bignum_deinit(a);
+            bignum_deinit(x);
+            bignum_deinit(temp);
+            return 0;
+        }
+    }
+    bignum_deinit(n_minus1);
+    bignum_deinit(d);
+    bignum_deinit(a);
+    bignum_deinit(x);
+    bignum_deinit(temp);
+    return 1;
+}
 /**
  * Test if n is probably prime, by repeatedly using the Solovay-Strassen primality test.
  */
 int probablePrime(bignum* n, int k) {
+  return rabinMillerPrime(n, k);
+}
+int probablePrime0(bignum* n, int k) {
 	if(bignum_equal(n, &NUMS[2])) return 1;
 	else if(n->data[0] % 2 == 0 || bignum_equal(n, &NUMS[1])) return 0;
 	while(k-- > 0) {
