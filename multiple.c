@@ -1026,7 +1026,58 @@ void base64_encode(const unsigned char *src, int len, char *out) {
   }
   out[j] = '\0';
 }
-
+// Simple Base64 decoding (no error checking, assumes valid input)
+int base64_table_code(unsigned char ch) {
+  return (strchr(b64_table, ch) - b64_table);
+}
+int base64_decode(const char *in, unsigned char *out) {
+  int len = 0, i = 0, j = 0, k;
+  unsigned char a3[3];
+  unsigned char a4[4];
+  while (in[i]) {
+    int v = base64_table_code((unsigned char)in[i]);
+    if (v >= 0) {
+      a4[j++] = v;
+      if (j == 4) {
+        out[len++] = (a4[0] << 2) | (a4[1] >> 4);
+        out[len++] = ((a4[1] & 0xf) << 4) | (a4[2] >> 2);
+        out[len++] = ((a4[2] & 0x3) << 6) | a4[3];
+        j = 0;
+      }
+    }
+    i++;
+  }
+  if (j) {
+    for (k = j; k < 4; k++)
+      a4[k] = 0;
+    out[len++] = (a4[0] << 2) | (a4[1] >> 4);
+    if (j > 2) out[len++] = ((a4[1] & 0xf) << 4) | (a4[2] >> 2);
+    if (j > 3) out[len++] = ((a4[2] & 0x3) << 6) | a4[3];
+  }
+  return len;
+}
+void bignum_frombytes(bignum *b, const unsigned char *buf, int len) {
+  int nwords = (len + 3) / 4;
+  if (b->capacity < nwords) {
+    b->capacity = nwords;
+    b->data = realloc(b->data, b->capacity * sizeof(word));
+  }
+  b->length = nwords;
+  memset(b->data, 0, nwords * sizeof(word));
+  int i, j = 0, rem = len % 4;
+  if (rem == 0) rem = 4;
+  for (i = 0; i < nwords; i++) {
+    word w = 0;
+    int cnt = (i == 0) ? rem : 4;
+    for (int k = 0; k < cnt; k++) {
+      w = (w << 8) | buf[j++];
+    }
+    b->data[nwords - 1 - i] = w;
+  }
+  // Remove leading zeros
+  while (b->length > 1 && b->data[b->length-1] == 0)
+    b->length--;
+}
 // Convert bignum to byte array (big-endian)
 int bignum_tobytes(bignum *b, unsigned char *buf, int bufsize) {
   int i, j = 0;
@@ -1042,7 +1093,41 @@ int bignum_tobytes(bignum *b, unsigned char *buf, int bufsize) {
   memmove(buf, buf + i, j - i);
   return j - i;
 }
+// Reads a custom PEM-like file and loads the two bignums (key, n)
+int read_key_from_pem(const char *filename, bignum *key, bignum *n) {
+  FILE *fp = fopen(filename, "r");
+  if (!fp) return 0;
+  char line[256];
+  int in_pem = 0, pos = 0;
+  char b64[8192];
+  b64[0] = '\0';
+  while (fgets(line, sizeof(line), fp)) {
+    if (strstr(line, "BEGIN RSA") != NULL) { in_pem = 1; continue; }
+    if (strstr(line, "END RSA") != NULL) break;
+    if (in_pem) {
+      strcat(b64, line);
+    }
+  }
+  fclose(fp);
 
+  // Remove newlines from b64
+  char *p = b64, *q = b64;
+  while (*q) {
+    if (*q != '\n' && *q != '\r') *p++ = *q;
+    q++;
+  }
+  *p = '\0';
+
+  unsigned char buf[4096];
+  int buflen = base64_decode(b64, buf);
+
+  // Split into two bignums (assumes first half is n, second is key)
+  int split = buflen / 2;
+  bignum_frombytes(n, buf, split);
+  bignum_frombytes(key, buf + split, buflen - split);
+
+  return 1;
+}
 // Save public key as a PEM-like file
 void save_key_to_pem(const char *filename, bignum *k, bignum *n, int privated) {
   FILE *fp = fopen(filename, "w");
@@ -1086,60 +1171,64 @@ int main(void) {
   FILE* f;
   
   srand(time(NULL));
-  
-  // randPrime(FACTOR_DIGITS, p);
-  randPrimeBits(nbits, p);
-  printf("Got first prime factor, p = ");
-  bignum_print(p);
-  printf(" ... ");
-  getchar();
-  
-  // randPrime(FACTOR_DIGITS, q);
-  randPrimeBits(nbits, q);
-  printf("Got second prime factor, q = ");
-  bignum_print(q);
-  printf(" ... ");
-  getchar();
-  
-  bignum_multiply(n, p, q);
-  printf("Got modulus, n = pq = ");
-  bignum_print(n);
-  printf(" ... ");
-  getchar();
-  
-  bignum_subtract(temp1, p, &NUMS[1]);
-  bignum_subtract(temp2, q, &NUMS[1]);
-  bignum_multiply(phi, temp1, temp2); /* phi = (p - 1) * (q - 1) */
-  printf("Got totient, phi = ");
-  bignum_print(phi);
-  printf(" ... ");
-  getchar();
-  
-  randExponent(phi, EXPONENT_MAX, e);
-  printf("Chose public exponent, e = ");
-  bignum_print(e);
-  printf("\nPublic key is (");
-  bignum_print(e);
-  printf(", ");
-  bignum_print(n);
-  printf(") ... ");
-  getchar();
-  
-  bignum_inverse(e, phi, d);
-  printf("Calculated private exponent, d = ");
-  bignum_print(d);
-  printf("\nPrivate key is (");
-  bignum_print(d);
-  printf(", ");
-  bignum_print(n);
-  printf(") ... ");
-  getchar();
 
-  //save_key_to_file("public.key", e, n);
-  save_key_to_pem("public.pem", e, n, 0);
-  //save_key_to_file("private.key", d, n);
-  save_key_to_pem("private.pem", d, n, 1);
+  if (
+    !read_key_from_pem("pubkey.pem", e, n) ||
+    !read_key_from_pem("private.pem", d, n)
+  ) {
+    // randPrime(FACTOR_DIGITS, p);
+    randPrimeBits(nbits, p);
+    printf("Got first prime factor, p = ");
+    bignum_print(p);
+    printf(" ... ");
+    getchar();
+    
+    // randPrime(FACTOR_DIGITS, q);
+    randPrimeBits(nbits, q);
+    printf("Got second prime factor, q = ");
+    bignum_print(q);
+    printf(" ... ");
+    getchar();
+    
+    bignum_multiply(n, p, q);
+    printf("Got modulus, n = pq = ");
+    bignum_print(n);
+    printf(" ... ");
+    getchar();
+    
+    bignum_subtract(temp1, p, &NUMS[1]);
+    bignum_subtract(temp2, q, &NUMS[1]);
+    bignum_multiply(phi, temp1, temp2); /* phi = (p - 1) * (q - 1) */
+    printf("Got totient, phi = ");
+    bignum_print(phi);
+    printf(" ... ");
+    getchar();
+    
+    randExponent(phi, EXPONENT_MAX, e);
+    printf("Chose public exponent, e = ");
+    bignum_print(e);
+    printf("\nPublic key is (");
+    bignum_print(e);
+    printf(", ");
+    bignum_print(n);
+    printf(") ... ");
+    getchar();
+    
+    bignum_inverse(e, phi, d);
+    printf("Calculated private exponent, d = ");
+    bignum_print(d);
+    printf("\nPrivate key is (");
+    bignum_print(d);
+    printf(", ");
+    bignum_print(n);
+    printf(") ... ");
+    getchar();
 
+    //save_key_to_file("public.key", e, n);
+    save_key_to_pem("public.pem", e, n, 0);
+    //save_key_to_file("private.key", d, n);
+    save_key_to_pem("private.pem", d, n, 1);
+  }
   /* Compute maximum number of bytes that can be encoded in one encryption */
   bytes = -1;
   bignum_fromint(shift, 1 << 7); /* 7 bits per char */
