@@ -947,7 +947,63 @@ int *decodeMessage(int len, int bytes, bignum *cryptogram, bignum *exponent, big
   }
   return decoded;
 }
+// Write a bignum to file as decimal string (with newline)
+void bignum_fprint(FILE *fp, bignum *b) {
+  int cap = 100, len = 0, i;
+  char* buffer = malloc(cap * sizeof(char));
+  bignum *copy = bignum_init(), *remainder = bignum_init();
+  if (b->length == 0 || bignum_iszero(b)) {
+    fprintf(fp, "0\n");
+  } else {
+    bignum_copy(b, copy);
+    while (bignum_isnonzero(copy)) {
+      bignum_idivider(copy, &NUMS[10], remainder);
+      buffer[len++] = remainder->data[0] + '0';
+      if (len >= cap) {
+        cap *= 2;
+        buffer = realloc(buffer, cap * sizeof(char));
+      }
+    }
+    for (i = len - 1; i >= 0; i--) fputc(buffer[i], fp);
+    fputc('\n', fp);
+  }
+  bignum_deinit(copy);
+  bignum_deinit(remainder);
+  free(buffer);
+}
 
+// Read a bignum from decimal string in file (up to newline)
+void bignum_fread(FILE *fp, bignum *b) {
+  char line[4096];
+  if (fgets(line, sizeof(line), fp) == NULL) return;
+  int len = strlen(line);
+  if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+  b->length = 0;
+  bignum_fromstring(b, line);
+}
+// Save (e, n) or (d, n) to file, each as decimal string on its own line
+void save_key_to_file(const char *filename, bignum *key, bignum *n) {
+  FILE *fp = fopen(filename, "w");
+  if (!fp) {
+    printf("Cannot write to file: %s\n", filename);
+    return;
+  }
+  bignum_fprint(fp, key);
+  bignum_fprint(fp, n);
+  fclose(fp);
+}
+
+// Read (e, n) or (d, n) from file
+void read_key_from_file(const char *filename, bignum *key, bignum *n) {
+  FILE *fp = fopen(filename, "r");
+  if (!fp) {
+    printf("Cannot read file: %s\n", filename);
+    return;
+  }
+  bignum_fread(fp, key);
+  bignum_fread(fp, n);
+  fclose(fp);
+}
 /**
  * Main method to demostrate the system. Sets up primes p, q, and proceeds to encode and
  * decode the message given in "text.txt"
@@ -1013,7 +1069,10 @@ int main(void) {
   bignum_print(n);
   printf(") ... ");
   getchar();
-  
+
+  save_key_to_file("public.key", e, n);
+  save_key_to_file("private.key", d, n);
+
   /* Compute maximum number of bytes that can be encoded in one encryption */
   bytes = -1;
   bignum_fromint(shift, 1 << 7); /* 7 bits per char */
