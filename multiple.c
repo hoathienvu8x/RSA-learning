@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdint.h>
 #include <string.h>
 #include <limits.h>
 
@@ -1004,6 +1005,70 @@ void read_key_from_file(const char *filename, bignum *key, bignum *n) {
   bignum_fread(fp, n);
   fclose(fp);
 }
+// Simple base64 encoding for bytes (not for bignum structure!)
+// For real-world, use a proper base64 library.
+static const char b64_table[] =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+void base64_encode(const unsigned char *src, int len, char *out) {
+  int i, j;
+  for (i = 0, j = 0; i < len;) {
+    uint32_t octet_a = i < len ? src[i++] : 0;
+    uint32_t octet_b = i < len ? src[i++] : 0;
+    uint32_t octet_c = i < len ? src[i++] : 0;
+
+    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+    out[j++] = b64_table[(triple >> 18) & 0x3F];
+    out[j++] = b64_table[(triple >> 12) & 0x3F];
+    out[j++] = (i > len + 1) ? '=' : b64_table[(triple >> 6) & 0x3F];
+    out[j++] = (i > len)     ? '=' : b64_table[triple & 0x3F];
+  }
+  out[j] = '\0';
+}
+
+// Convert bignum to byte array (big-endian)
+int bignum_tobytes(bignum *b, unsigned char *buf, int bufsize) {
+  int i, j = 0;
+  for (i = b->length - 1; i >= 0; i--) {
+    buf[j++] = (b->data[i] >> 24) & 0xFF;
+    buf[j++] = (b->data[i] >> 16) & 0xFF;
+    buf[j++] = (b->data[i] >> 8) & 0xFF;
+    buf[j++] = (b->data[i]) & 0xFF;
+  }
+  // Remove leading zeros
+  i = 0;
+  while (i < j && buf[i] == 0) i++;
+  memmove(buf, buf + i, j - i);
+  return j - i;
+}
+
+// Save public key as a PEM-like file
+void save_key_to_pem(const char *filename, bignum *k, bignum *n, int privated) {
+  FILE *fp = fopen(filename, "w");
+  if (!fp) return;
+  unsigned char buf[2048], keybuf[4096];
+  int nlen = bignum_tobytes(n, buf, sizeof(buf));
+  int elen = bignum_tobytes(k, buf + nlen, sizeof(buf) - nlen);
+  int totlen = nlen + elen;
+  memcpy(keybuf, buf, totlen);
+
+  char b64[8192];
+  base64_encode(keybuf, totlen, b64);
+
+  if (privated)
+    fprintf(fp, "-----BEGIN RSA PRIVATE KEY-----\n");
+  else
+    fprintf(fp, "-----BEGIN RSA PUBLIC KEY-----\n");
+  for (int i = 0; i < (int)strlen(b64); i += 64) {
+      fprintf(fp, "%.*s\n", 64, b64 + i);
+  }
+  if (privated)
+    fprintf(fp, "-----END RSA PRIVATE KEY-----\n");
+  else
+    fprintf(fp, "-----END RSA PUBLIC KEY-----\n");
+  fclose(fp);
+}
 /**
  * Main method to demostrate the system. Sets up primes p, q, and proceeds to encode and
  * decode the message given in "text.txt"
@@ -1070,8 +1135,10 @@ int main(void) {
   printf(") ... ");
   getchar();
 
-  save_key_to_file("public.key", e, n);
-  save_key_to_file("private.key", d, n);
+  //save_key_to_file("public.key", e, n);
+  save_key_to_pem("public.pem", e, n, 0);
+  //save_key_to_file("private.key", d, n);
+  save_key_to_pem("private.pem", d, n, 1);
 
   /* Compute maximum number of bytes that can be encoded in one encryption */
   bytes = -1;
